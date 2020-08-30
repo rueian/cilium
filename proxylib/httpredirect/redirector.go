@@ -23,11 +23,13 @@ func (m *repeater) Write(bytes []byte) (int, error) {
 	return len(bytes), nil
 }
 
-func (m *repeater) Read(bytes []byte) (int, error) {
-	n, err := io.ReadFull(m.buf, bytes)
-	if n == 0 && err == io.EOF {
+func (m *repeater) Read(buf []byte) (int, error) {
+	n, err := m.buf.Read(buf)
+	if err == io.EOF {
 		m.buf.Seek(0, 0)
-		n, err = io.ReadFull(m.buf, bytes)
+		if n == 0 {
+			n, err = m.buf.Read(buf)
+		}
 	}
 	return n, err
 }

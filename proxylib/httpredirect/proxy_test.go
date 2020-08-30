@@ -104,8 +104,7 @@ func (s *HTTPRedirectSuite) TestHTTPRedirectOnDataBasicPass(c *C) {
 	msg += "123456789"
 	data := [][]byte{[]byte(msg)}
 	conn.CheckOnDataOK(c, false, false, &data, RepeaterHello,
-		proxylib.DROP, len(msg)-9,
-		proxylib.DROP, 9)
+		proxylib.DROP, len(msg))
 }
 
 func (s *HTTPRedirectSuite) TestHTTPRedirectOnDataMultipleReq(c *C) {

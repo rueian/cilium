@@ -129,12 +129,14 @@ const (
 	DecisionPass
 	DecisionProxy
 	DecisionRedirect
+	DecisionRedirectRead
 )
 
 type parser struct {
 	connection *proxylib.Connection
 	decision   Decision
-	remaining  int // -1 for transfer-encoding
+	remaining  int
+	chunked    bool
 
 	proxyAddr string
 	proxyConn io.ReadWriteCloser
@@ -146,7 +148,7 @@ func (f *factory) Create(connection *proxylib.Connection) interface{} {
 	return &parser{connection: connection}
 }
 
-func parseHead(data []byte) (*httpHead, error) {
+func parseHead(reply bool, data []byte) (*httpHead, error) {
 	tp := textproto.NewReader(bufio.NewReader(bytes.NewBuffer(data)))
 	line, err := tp.ReadLine()
 	if err != nil {
@@ -164,6 +166,15 @@ func parseHead(data []byte) (*httpHead, error) {
 		return nil, err
 	}
 
+	if reply {
+		return &httpHead{
+			Method: line[s1+1 : s2], // status code
+			URI:    line[s2+1:],     // status message
+			Proto:  line[:s1],
+			Header: headers,
+		}, nil
+	}
+
 	return &httpHead{
 		Method: line[:s1],
 		URI:    line[s1+1 : s2],
@@ -172,14 +183,73 @@ func parseHead(data []byte) (*httpHead, error) {
 	}, nil
 }
 
-func (p *parser) OnData(reply, endStream bool, dataArray [][]byte) (proxylib.OpType, int) {
+func (p *parser) OnData(reply, endStream bool, dataArray [][]byte) (op proxylib.OpType, n int) {
 	defer func() {
 		if endStream && p.proxyConn != nil {
 			p.proxyConn.Close()
 		}
 	}()
+	for op = proxylib.NOP; op == proxylib.NOP; {
+		op, n = p.onData(reply, endStream, dataArray)
+	}
+	return
+}
 
-	if p.decision == DecisionNotYet {
+func (p *parser) onData(reply, endStream bool, dataArray [][]byte) (proxylib.OpType, int) {
+	switch p.decision {
+	case DecisionProxy:
+		return proxylib.PASS, len(bytes.Join(dataArray, []byte{}))
+	case DecisionPass:
+		if remaining := p.remaining; remaining > 0 {
+			p.remaining = 0
+			return proxylib.PASS, remaining
+		}
+		if !p.chunked {
+			p.decision = DecisionNotYet // reset
+			return proxylib.NOP, 0
+		}
+		// transfer-encoding
+		chunkLen := bytes.Index(bytes.Join(dataArray, []byte{}), []byte("\r\n"))
+		if chunkLen < 0 {
+			return proxylib.MORE, 1
+		}
+		if chunkLen == 0 {
+			p.decision = DecisionNotYet // reset
+		}
+		return proxylib.PASS, chunkLen + 2
+	case DecisionRedirectRead:
+		resp, err := p.proxyRead()
+		if err != nil {
+			return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
+		}
+		p.connection.Inject(true, resp)
+		p.decision = DecisionNotYet // reset
+		return proxylib.DROP, p.remaining
+	case DecisionRedirect:
+		data := bytes.Join(dataArray, []byte{})
+		if remaining := p.remaining; remaining > 0 {
+			if ld := len(data); ld < remaining {
+				return proxylib.MORE, remaining - ld
+			}
+			if err := p.proxyWrite(data[:remaining]); err != nil {
+				return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
+			}
+			if !p.chunked || remaining == 2 { // 2 for the final '\r\n' chunk
+				p.decision = DecisionRedirectRead
+				return proxylib.NOP, 0
+			}
+			p.remaining = 0
+			return proxylib.DROP, remaining
+		} else {
+			// transfer-encoding
+			chunkLen := bytes.Index(data, []byte("\r\n"))
+			if chunkLen < 0 {
+				return proxylib.MORE, 1
+			}
+			p.remaining = chunkLen + 2 // including the \r\n
+			return proxylib.NOP, 0
+		}
+	default:
 		// inefficient, but simple
 		data := bytes.Join(dataArray, []byte{})
 
@@ -190,111 +260,25 @@ func (p *parser) OnData(reply, endStream bool, dataArray [][]byte) (proxylib.OpT
 		}
 		headLen += 4 // include the \r\n\r\n
 
-		head, err := parseHead(data[:headLen])
+		head, err := parseHead(reply, data[:headLen])
 		if err != nil {
 			return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
 		}
 
-		contentLength, _ := strconv.Atoi(head.Header.Get("Content-Length"))
-		transferEncoding := len(head.Header.Get("Transfer-Encoding")) > 0
+		p.remaining, _ = strconv.Atoi(head.Header.Get("Content-Length"))
+		p.chunked = len(head.Header.Get("Transfer-Encoding")) > 0
 		upgrade := len(head.Header.Get("Upgrade")) > 0
-
-		if transferEncoding {
-			p.remaining = -1
-		} else {
-			p.remaining = contentLength
-		}
 
 		if upgrade || head.Method == "CONNECT" {
 			p.decision = DecisionProxy
-			return proxylib.PASS, headLen
 		} else if reply || !p.connection.Matches(head) {
 			p.decision = DecisionPass
-			return proxylib.PASS, headLen
 		} else {
 			p.proxyAddr = head.ProxyAddr // hack: insert ProxyAddr after Matches
 			p.decision = DecisionRedirect
-			log.Debugf("HTTPRedirect DecisionRedirect %d", headLen)
-			if err := p.proxyWrite(data[:headLen]); err != nil {
-				log.Debugf("HTTPRedirect proxyWrite err %v", err)
-				return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
-			}
-			if p.remaining == 0 {
-				resp, err := p.proxyRead()
-				if err != nil {
-					log.Debugf("HTTPRedirect proxyRead err %v", err)
-					return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
-				}
-				p.connection.Inject(true, resp)
-				p.decision = DecisionNotYet // reset
-			}
-			return proxylib.DROP, headLen
 		}
-	}
-
-	// decision is made
-
-	if p.decision == DecisionProxy {
-		return proxylib.PASS, len(bytes.Join(dataArray, []byte{}))
-	}
-
-	if p.decision == DecisionPass {
-		if p.remaining >= 0 {
-			p.decision = DecisionNotYet // reset
-			return proxylib.PASS, p.remaining
-		} else {
-			// transfer-encoding
-
-			// inefficient, but simple
-			chunkLen := bytes.Index(bytes.Join(dataArray, []byte{}), []byte("\r\n"))
-			if chunkLen < 0 {
-				return proxylib.MORE, 1
-			}
-			if chunkLen == 0 {
-				p.decision = DecisionNotYet // reset
-			}
-			return proxylib.PASS, chunkLen + 2
-		}
-	}
-
-	// decision proxy body
-	// p.decision == DecisionProxy
-
-	// inefficient, but simple
-	data := bytes.Join(dataArray, []byte{})
-
-	if p.remaining >= 0 {
-		if ld := len(data); ld < p.remaining {
-			return proxylib.MORE, p.remaining - ld
-		}
-		if err := p.proxyWrite(data[:p.remaining]); err != nil {
-			return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
-		}
-		resp, err := p.proxyRead()
-		if err != nil {
-			return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
-		}
-		p.connection.Inject(true, resp)
-		p.decision = DecisionNotYet // reset
-		return proxylib.DROP, p.remaining
-	} else {
-		// transfer-encoding
-		chunkLen := bytes.Index(data, []byte("\r\n"))
-		if chunkLen < 0 {
-			return proxylib.MORE, 1
-		}
-		if err := p.proxyWrite(data[:chunkLen+2]); err != nil {
-			return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
-		}
-		if chunkLen == 0 {
-			resp, err := p.proxyRead()
-			if err != nil {
-				return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
-			}
-			p.connection.Inject(true, resp)
-			p.decision = DecisionNotYet // reset
-		}
-		return proxylib.DROP, chunkLen + 2
+		p.remaining += headLen
+		return proxylib.NOP, 0
 	}
 }
 
@@ -313,7 +297,9 @@ func (p *parser) proxyWrite(data []byte) (err error) {
 }
 
 func (p *parser) proxyRead() (data []byte, err error) {
-	rb := bufio.NewReader(p.proxyConn)
+	wb := bytes.NewBuffer(nil)
+	te := io.TeeReader(p.proxyConn, wb)
+	rb := bufio.NewReader(te)
 	tp := textproto.NewReader(rb)
 	line, err := tp.ReadLineBytes()
 	if err != nil {
@@ -326,31 +312,18 @@ func (p *parser) proxyRead() (data []byte, err error) {
 	contentLength, _ := strconv.Atoi(header.Get("Content-Length"))
 	transferEncoding := len(header.Get("Transfer-Encoding")) > 0
 
-	wb := bytes.NewBuffer(nil)
-	wb.Write(line)
-	wb.Write([]byte("\r\n"))
-	for k, vs := range header {
-		for _, v := range vs {
-			wb.Write([]byte(k + ": " + v + "\r\n"))
-		}
-	}
-	wb.Write([]byte("\r\n"))
-
 	if transferEncoding {
 		for len(line) != 0 {
 			line, err = tp.ReadLineBytes()
 			if err != nil {
 				return nil, err
 			}
-			wb.Write(line)
-			wb.Write([]byte("\r\n"))
 		}
 	} else {
 		body := make([]byte, contentLength)
 		if _, err = io.ReadFull(rb, body); err != nil {
 			return nil, err
 		}
-		wb.Write(body)
 	}
 	return wb.Bytes(), nil
 }
