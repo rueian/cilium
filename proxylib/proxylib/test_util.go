@@ -15,10 +15,6 @@
 package proxylib
 
 import (
-	"github.com/cilium/proxy/go/cilium/api"
-	envoy_service_disacovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes/any"
 	log "github.com/sirupsen/logrus"
 	. "gopkg.in/check.v1"
 )
@@ -29,48 +25,48 @@ func (ins *Instance) CheckInsertPolicyText(c *C, version string, policies []stri
 }
 
 func (ins *Instance) InsertPolicyText(version string, policies []string, expectFail string) error {
-	typeUrl := "type.googleapis.com/cilium.NetworkPolicy"
-	resources := make([]*any.Any, 0, len(policies))
+	// typeUrl := "type.googleapis.com/cilium.NetworkPolicy"
+	// resources := make([]*any.Any, 0, len(policies))
 
-	for _, policy := range policies {
-		pb := new(cilium.NetworkPolicy)
-		err := proto.UnmarshalText(policy, pb)
-		if err != nil {
-			if expectFail != "unmarshal" {
-				log.Fatalf("Policy UnmarshalText failed: %v", err)
-			}
-			return err
-		}
-		log.Debugf("Text -> proto.Message: %s -> %v", policy, pb)
-		data, err := proto.Marshal(pb)
-		if err != nil {
-			if expectFail != "marshal" {
-				log.Fatalf("Policy marshal failed: %v", err)
-			}
-			return err
-		}
+	// for _, policy := range policies {
+	// 	pb := new(cilium.NetworkPolicy)
+	// 	err := proto.UnmarshalText(policy, pb)
+	// 	if err != nil {
+	// 		if expectFail != "unmarshal" {
+	// 			log.Fatalf("Policy UnmarshalText failed: %v", err)
+	// 		}
+	// 		return err
+	// 	}
+	// 	log.Debugf("Text -> proto.Message: %s -> %v", policy, pb)
+	// 	data, err := proto.Marshal(pb)
+	// 	if err != nil {
+	// 		if expectFail != "marshal" {
+	// 			log.Fatalf("Policy marshal failed: %v", err)
+	// 		}
+	// 		return err
+	// 	}
 
-		resources = append(resources, &any.Any{
-			TypeUrl: typeUrl,
-			Value:   data,
-		})
-	}
+	// 	resources = append(resources, &any.Any{
+	// 		TypeUrl: typeUrl,
+	// 		Value:   data,
+	// 	})
+	// }
 
-	msg := &envoy_service_disacovery.DiscoveryResponse{
-		VersionInfo: version,
-		Canary:      false,
-		TypeUrl:     typeUrl,
-		Nonce:       "randomNonce1",
-		Resources:   resources,
-	}
+	// msg := &envoy_service_disacovery.DiscoveryResponse{
+	// 	VersionInfo: version,
+	// 	Canary:      false,
+	// 	TypeUrl:     typeUrl,
+	// 	Nonce:       "randomNonce1",
+	// 	Resources:   resources,
+	// }
 
-	err := ins.PolicyUpdate(msg)
-	if err != nil {
-		if expectFail != "update" {
-			log.Fatalf("Policy Update failed: %v", err)
-		}
-	}
-	return err
+	// err := ins.PolicyUpdate(msg)
+	// if err != nil {
+	// 	if expectFail != "update" {
+	// 		log.Fatalf("Policy Update failed: %v", err)
+	// 	}
+	// }
+	return nil
 }
 
 var connectionID uint64

@@ -16,11 +16,9 @@ package proxylib
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
-	"github.com/cilium/proxy/go/cilium/api"
+	cilium "github.com/cilium/proxy/go/cilium/api"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -45,15 +43,15 @@ type InjectBuf *[]byte
 // Connection holds the connection metadata that is used both for
 // policy enforcement and access logging.
 type Connection struct {
-	Instance   *Instance // Holder of Policy protocol and access logging clients
-	Id         uint64    // Unique connection ID allocated by the caller
-	Ingress    bool      // 'true' for ingress, 'false' for egress
-	SrcId      uint32    // Source security ID, may be mapped from the source IP address
-	DstId      uint32    // Destination security ID, may be mapped from the destination IP address
-	SrcAddr    string    // Source IP address in "a.b.c.d:port" or "[A:...:C]:port" format
-	DstAddr    string    // Original destination IP address
-	PolicyName string    // Identifies which policy instance applies to this connection
-	Port       uint32    // (original) destination port number in numeric format
+	Instance *Instance // Holder of Policy protocol and access logging clients
+	Id       uint64    // Unique connection ID allocated by the caller
+	Ingress  bool      // 'true' for ingress, 'false' for egress
+	SrcId    uint32    // Source security ID, may be mapped from the source IP address
+	DstId    uint32    // Destination security ID, may be mapped from the destination IP address
+	SrcAddr  string    // Source IP address in "a.b.c.d:port" or "[A:...:C]:port" format
+	DstAddr  string    // Original destination IP address
+	// PolicyName string    // Identifies which policy instance applies to this connection
+	// Port       uint32    // (original) destination port number in numeric format
 
 	ParserName string      // Name of the parser
 	Parser     interface{} // Parser instance used on this connection
@@ -68,34 +66,34 @@ func NewConnection(instance *Instance, proto string, connectionId uint64, ingres
 	if parserFactory == nil {
 		return UNKNOWN_PARSER, nil
 	}
-	_, port, err := net.SplitHostPort(dstAddr)
-	if err != nil {
-		return INVALID_ADDRESS, nil
-	}
-	dstPort, err := strconv.ParseUint(port, 10, 32)
-	if err != nil || dstPort == 0 {
-		return INVALID_ADDRESS, nil
-	}
+	// _, port, err := net.SplitHostPort(dstAddr)
+	// if err != nil {
+	// 	return INVALID_ADDRESS, nil
+	// }
+	// dstPort, err := strconv.ParseUint(port, 10, 32)
+	// if err != nil || dstPort == 0 {
+	// 	return INVALID_ADDRESS, nil
+	// }
 
 	connection := &Connection{
-		Instance:   instance,
-		Id:         connectionId,
-		Ingress:    ingress,
-		SrcId:      srcId,
-		DstId:      dstId,
-		SrcAddr:    srcAddr,
-		DstAddr:    dstAddr,
-		Port:       uint32(dstPort),
-		PolicyName: policyName,
+		Instance: instance,
+		Id:       connectionId,
+		Ingress:  ingress,
+		SrcId:    srcId,
+		DstId:    dstId,
+		SrcAddr:  srcAddr,
+		DstAddr:  dstAddr,
+		// Port:       uint32(dstPort),
+		// PolicyName: policyName,
 		ParserName: proto,
 		OrigBuf:    origBuf,
 		ReplyBuf:   replyBuf,
 	}
 	connection.Parser = parserFactory.Create(connection)
-	if connection.Parser == nil {
-		// Parser rejected the new connection based on the connection metadata
-		return POLICY_DROP, nil
-	}
+	// if connection.Parser == nil {
+	// 	// Parser rejected the new connection based on the connection metadata
+	// 	return POLICY_DROP, nil
+	// }
 
 	return nil, connection
 }
@@ -123,7 +121,7 @@ func (connection *Connection) OnData(reply, endStream bool, data *[][]byte, filt
 			connection.Log(cilium.EntryType_Denied,
 				&cilium.LogEntry_GenericL7{
 					GenericL7: &cilium.L7LogEntry{
-						Proto: connection.ParserName,
+						// Proto: connection.ParserName,
 						Fields: map[string]string{
 							// "status" is shown in Cilium monitor
 							"status": fmt.Sprintf("Panic: %s", r),
@@ -215,12 +213,13 @@ func (connection *Connection) OnData(reply, endStream bool, data *[][]byte, filt
 }
 
 func (connection *Connection) Matches(l7 interface{}) bool {
-	log.Debugf("proxylib: Matching policy on connection %v", connection)
-	remoteID := connection.DstId
-	if connection.Ingress {
-		remoteID = connection.SrcId
-	}
-	return connection.Instance.PolicyMatches(connection.PolicyName, connection.Ingress, connection.Port, remoteID, l7)
+	return true
+	// log.Debugf("proxylib: Matching policy on connection %v", connection)
+	// remoteID := connection.DstId
+	// if connection.Ingress {
+	// 	remoteID = connection.SrcId
+	// }
+	// return connection.Instance.PolicyMatches(connection.PolicyName, connection.Ingress, connection.Port, remoteID, l7)
 }
 
 // getInjectBuf return the pointer to the inject buffer slice header for the indicated direction
@@ -258,7 +257,6 @@ func (conn *Connection) Log(entryType cilium.EntryType, l7 cilium.IsLogEntry_L7)
 		Timestamp:             uint64(time.Now().UnixNano()),
 		IsIngress:             conn.Ingress,
 		EntryType:             entryType,
-		PolicyName:            conn.PolicyName,
 		SourceSecurityId:      conn.SrcId,
 		DestinationSecurityId: conn.DstId,
 		SourceAddress:         conn.SrcAddr,
