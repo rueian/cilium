@@ -21,12 +21,7 @@ import "C"
 
 import (
 	"github.com/cilium/cilium/proxylib/accesslog"
-	_ "github.com/cilium/cilium/proxylib/cassandra"
-	_ "github.com/cilium/cilium/proxylib/kafka"
-	_ "github.com/cilium/cilium/proxylib/memcached"
-	"github.com/cilium/cilium/proxylib/npds"
 	. "github.com/cilium/cilium/proxylib/proxylib"
-	_ "github.com/cilium/cilium/proxylib/r2d2"
 	_ "github.com/cilium/cilium/proxylib/testparsers"
 
 	"github.com/cilium/cilium/pkg/flowdebug"
@@ -39,6 +34,8 @@ var (
 	mutex lock.RWMutex
 	// Key uint64 is a connection ID allocated by Envoy, practically a monotonically increasing number
 	connections map[uint64]*Connection = make(map[uint64]*Connection)
+
+	parser string
 )
 
 func init() {
@@ -62,7 +59,7 @@ func OnNewConnection(instanceId uint64, proto string, connectionId uint64, ingre
 		return C.FILTER_INVALID_INSTANCE
 	}
 
-	err, conn := NewConnection(instance, strcpy(proto), connectionId, ingress, srcId, dstId, strcpy(srcAddr), strcpy(dstAddr), strcpy(policyName), origBuf, replyBuf)
+	err, conn := NewConnection(instance, parser, connectionId, ingress, srcId, dstId, strcpy(srcAddr), strcpy(dstAddr), strcpy(policyName), origBuf, replyBuf)
 	if err == nil {
 		mutex.Lock()
 		connections[connectionId] = conn
@@ -124,20 +121,31 @@ func Close(connectionId uint64) {
 // Zero return value indicates an error.
 //export OpenModule
 func OpenModule(params [][2]string, debug bool) uint64 {
-	var accessLogPath, xdsPath, nodeID string
+	// var accessLogPath, xdsPath, nodeID string
+	// for i := range params {
+	// 	key := params[i][0]
+	// 	value := strcpy(params[i][1])
+
+	// 	switch key {
+	// 	case "access-log-path":
+	// 		accessLogPath = value
+	// 	case "xds-path":
+	// 		xdsPath = value
+	// 	case "node-id":
+	// 		nodeID = value
+	// 	default:
+	// 		return 0
+	// 	}
+	// }
+	var accessLogPath string
 	for i := range params {
 		key := params[i][0]
 		value := strcpy(params[i][1])
-
 		switch key {
 		case "access-log-path":
 			accessLogPath = value
-		case "xds-path":
-			xdsPath = value
-		case "node-id":
-			nodeID = value
-		default:
-			return 0
+		case "parser":
+			parser = value
 		}
 	}
 
@@ -149,7 +157,7 @@ func OpenModule(params [][2]string, debug bool) uint64 {
 	}
 	// Copy strings from C-memory to Go-memory so that the string remains valid
 	// also after this function returns
-	return OpenInstance(nodeID, xdsPath, npds.NewClient, accessLogPath, accesslog.NewClient)
+	return OpenInstance(accessLogPath, accesslog.NewClient)
 }
 
 //export CloseModule

@@ -1,0 +1,14 @@
+FROM quay.io/cilium/cilium-envoy-builder:b5722f7b65f7a85027ef27637fd7d05051517cde as builder
+
+LABEL maintainer="maintainer@cilium.io"
+WORKDIR /cilium
+COPY . ./
+RUN cd proxylib && make libcilium.so
+
+
+FROM rueian/half-cilium-envoy:ccdd162a6ac127c92bf3f935adbbc0e6e037d601 as cilium-envoy
+
+FROM ubuntu:20.04
+COPY --from=builder /cilium/proxylib/libcilium.so /libcilium.so
+COPY --from=cilium-envoy /usr/bin/cilium-envoy /usr/bin/cilium-envoy
+ENTRYPOINT [ "/usr/bin/cilium-envoy", "-c", "/etc/envoy/envoy.yaml" ]

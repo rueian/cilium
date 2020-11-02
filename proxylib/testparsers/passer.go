@@ -23,7 +23,7 @@ import (
 type PasserParserFactory struct{}
 
 func init() {
-	log.Debug("init(): Registering PasserParserFactory")
+	log.Printf("init(): Registering PasserParserFactory")
 	RegisterParserFactory("test.passer", &PasserParserFactory{})
 }
 
@@ -31,11 +31,11 @@ type PasserParser struct{}
 
 func (p *PasserParserFactory) Create(connection *Connection) interface{} {
 	// Reject invalid policy name for testing purposes
-	if connection.PolicyName == "invalid-policy" {
-		return nil
-	}
+	// if connection.PolicyName == "invalid-policy" {
+	// 	return nil
+	// }
 
-	log.Debugf("PasserParserFactory: Create: %v", connection)
+	log.Printf("PasserParserFactory: Create: %v", connection)
 	return &PasserParser{}
 }
 
@@ -51,9 +51,9 @@ func (p *PasserParser) OnData(reply, endStream bool, data [][]byte) (OpType, int
 		return NOP, 0
 	}
 	if !reply {
-		log.Debugf("PasserParser: Request: %d bytes", n_bytes)
+		log.Printf("PasserParser: Request: %d bytes", n_bytes)
 	} else {
-		log.Debugf("PasserParser: Response: %d bytes", n_bytes)
+		log.Printf("PasserParser: Response: %d bytes", n_bytes)
 	}
 	return PASS, n_bytes
 }
