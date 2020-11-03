@@ -102,8 +102,6 @@ func ruleParser(rule *cilium.PortNetworkPolicyRule) []proxylib.L7NetworkPolicyRu
 				if v != "" {
 					rr.PathRegex = regexp.MustCompile(v)
 				}
-			default:
-				proxylib.ParseError(fmt.Sprintf("Unsupported key: %s", k), rule)
 			}
 		}
 		if rr.ProxyAddr == "" {
