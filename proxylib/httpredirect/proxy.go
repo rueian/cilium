@@ -130,6 +130,7 @@ const (
 	DecisionProxy
 	DecisionRedirect
 	DecisionRedirectRead
+	DecisionRedirectInject
 )
 
 type parser struct {
@@ -137,6 +138,8 @@ type parser struct {
 	decision   Decision
 	remaining  int
 	chunked    bool
+	pending    []byte
+	injected   int
 
 	proxyAddr string
 	proxyConn io.ReadWriteCloser
@@ -222,7 +225,16 @@ func (p *parser) onData(reply, endStream bool, dataArray [][]byte) (proxylib.OpT
 		if err != nil {
 			return proxylib.ERROR, int(proxylib.ERROR_INVALID_FRAME_TYPE)
 		}
-		p.connection.Inject(true, resp)
+		p.pending = resp
+		p.injected = 0
+		p.decision = DecisionRedirectInject
+		return proxylib.NOP, 0
+	case DecisionRedirectInject:
+		n := p.connection.Inject(true, p.pending[p.injected:])
+		if p.injected += n; p.injected < len(p.pending) {
+			return proxylib.INJECT, n
+		}
+		p.pending = nil
 		p.decision = DecisionNotYet // reset
 		return proxylib.DROP, p.remaining
 	case DecisionRedirect:
