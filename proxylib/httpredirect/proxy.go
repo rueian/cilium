@@ -45,6 +45,7 @@ type httpHead struct {
 	URI       string
 	Header    textproto.MIMEHeader
 	ProxyAddr string
+	MatchedBy string
 }
 
 func (rule *httpRedirect) Matches(data interface{}) bool {
@@ -55,23 +56,33 @@ func (rule *httpRedirect) Matches(data interface{}) bool {
 		return false
 	}
 
-	if rule.Methods != "" && !strings.Contains(rule.Methods, req.Method) {
-		return false
+	matchedBy := make([]string, 0, 3)
+
+	if rule.Methods != "" {
+		if !strings.Contains(rule.Methods, req.Method) {
+			return false
+		}
+		matchedBy = append(matchedBy, "Methods:"+rule.Methods)
 	}
 
 	if rule.HeaderKey != "" {
 		for _, v := range req.Header.Values(rule.HeaderKey) {
 			if v == rule.HeaderValue {
+				matchedBy = append(matchedBy, "Header:"+rule.HeaderKey+"="+rule.HeaderValue)
 				goto regex
 			}
 		}
 		return false
 	}
 regex:
-	if rule.PathRegex != nil && !rule.PathRegex.MatchString(req.URI) {
-		return false
+	if rule.PathRegex != nil {
+		if !rule.PathRegex.MatchString(req.URI) {
+			return false
+		}
+		matchedBy = append(matchedBy, "PathRegex:"+rule.PathRegex.String())
 	}
 
+	req.MatchedBy = strings.Join(matchedBy, "|")
 	req.ProxyAddr = rule.ProxyAddr
 	return true
 }
@@ -279,15 +290,35 @@ func (p *parser) onData(reply, endStream bool, dataArray [][]byte) (proxylib.OpT
 		p.chunked = len(head.Header.Get("Transfer-Encoding")) > 0
 		upgrade := len(head.Header.Get("Upgrade")) > 0
 
+		logType := cilium.EntryType_Request
 		if upgrade || head.Method == "CONNECT" {
 			p.decision = DecisionProxy
-		} else if reply || !p.connection.Matches(head) {
+		} else if reply {
+			p.decision = DecisionPass
+			logType = cilium.EntryType_Response
+		} else if !p.connection.Matches(head) {
 			p.decision = DecisionPass
 		} else {
 			p.proxyAddr = head.ProxyAddr // hack: insert ProxyAddr after Matches
 			p.decision = DecisionRedirect
+			logType = cilium.EntryType_Denied
 		}
 		p.remaining += headLen
+
+		logFields := map[string]string{
+			"URI":     head.URI,
+			"Method":  head.Method,
+			"Proto":   head.Proto,
+			"Matched": head.MatchedBy,
+		}
+
+		p.connection.Log(logType, &cilium.LogEntry_GenericL7{
+			GenericL7: &cilium.L7LogEntry{
+				Proto:  "HTTPRedirect",
+				Fields: logFields,
+			},
+		})
+
 		return proxylib.NOP, 0
 	}
 }
