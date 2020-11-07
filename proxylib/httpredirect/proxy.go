@@ -199,18 +199,27 @@ func (p *parser) OnData(reply, endStream bool, dataArray [][]byte) (op proxylib.
 	defer func() {
 		if endStream && p.proxyConn != nil {
 			p.proxyConn.Close()
+			p.proxyConn = nil
 		}
 	}()
+
+	for _, da := range dataArray {
+		n += len(da)
+	}
+	if n == 0 {
+		return proxylib.NOP, n
+	}
+
 	for op = proxylib.NOP; op == proxylib.NOP; {
-		op, n = p.onData(reply, endStream, dataArray)
+		op, n = p.onData(reply, endStream, dataArray, n)
 	}
 	return
 }
 
-func (p *parser) onData(reply, endStream bool, dataArray [][]byte) (proxylib.OpType, int) {
+func (p *parser) onData(reply, endStream bool, dataArray [][]byte, dataSize int) (proxylib.OpType, int) {
 	switch p.decision {
 	case DecisionProxy:
-		return proxylib.PASS, len(bytes.Join(dataArray, []byte{}))
+		return proxylib.PASS, dataSize
 	case DecisionPass:
 		if remaining := p.remaining; remaining > 0 {
 			p.remaining = 0
