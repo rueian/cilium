@@ -3,6 +3,8 @@ package httpredirect
 import (
 	"bytes"
 	"io"
+	"net"
+	"time"
 )
 
 var RepeaterHello = []byte("HTTP/1.1 200 OK\r\n" +
@@ -17,6 +19,26 @@ func NewRepeater() *repeater {
 
 type repeater struct {
 	buf *bytes.Reader
+}
+
+func (m *repeater) LocalAddr() net.Addr {
+	return nil
+}
+
+func (m *repeater) RemoteAddr() net.Addr {
+	return nil
+}
+
+func (m *repeater) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (m *repeater) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (m *repeater) SetWriteDeadline(t time.Time) error {
+	return nil
 }
 
 func (m *repeater) Write(bytes []byte) (int, error) {

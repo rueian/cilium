@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cilium/cilium/proxylib/proxylib"
 
@@ -151,7 +152,7 @@ type parser struct {
 	injected   int
 
 	proxyAddr string
-	proxyConn io.ReadWriteCloser
+	proxyConn net.Conn
 }
 
 func (f *factory) Create(connection *proxylib.Connection) interface{} {
@@ -283,6 +284,8 @@ func (p *parser) onData(reply, endStream bool, dataArray [][]byte, dataSize int)
 		// inefficient, but simple
 		data := bytes.Join(dataArray, []byte{})
 
+		log.Debugf("HTTPRedirect: %t %t %d %v", reply, endStream, dataSize, data)
+
 		// read the request/response header to make decision
 		headLen := bytes.Index(data, []byte("\r\n\r\n"))
 		if headLen < 0 {
@@ -337,16 +340,18 @@ func (p *parser) proxyWrite(data []byte) (err error) {
 		if p.proxyAddr == "repeater" {
 			p.proxyConn = NewRepeater()
 		} else {
-			if p.proxyConn, err = net.Dial("tcp", p.proxyAddr); err != nil {
+			if p.proxyConn, err = net.DialTimeout("tcp", p.proxyAddr, time.Second); err != nil {
 				return err
 			}
 		}
 	}
+	p.proxyConn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, err = p.proxyConn.Write(data)
 	return err
 }
 
 func (p *parser) proxyRead() (data []byte, err error) {
+	p.proxyConn.SetReadDeadline(time.Now().Add(time.Second))
 	wb := bytes.NewBuffer(nil)
 	te := io.TeeReader(p.proxyConn, wb)
 	rb := bufio.NewReader(te)
