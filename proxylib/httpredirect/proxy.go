@@ -152,13 +152,13 @@ type parser struct {
 	injected   int
 
 	proxyAddr string
-	proxyConn net.Conn
+	proxyConn map[string]net.Conn
 }
 
 func (f *factory) Create(connection *proxylib.Connection) interface{} {
 	log.Debugf("HTTPRedirectParserFactory: Create: %v", connection)
 
-	return &parser{connection: connection}
+	return &parser{connection: connection, proxyConn: map[string]net.Conn{}}
 }
 
 func parseHead(reply bool, data []byte) (*httpHead, error) {
@@ -197,12 +197,14 @@ func parseHead(reply bool, data []byte) (*httpHead, error) {
 }
 
 func (p *parser) OnData(reply, endStream bool, dataArray [][]byte) (op proxylib.OpType, n int) {
-	defer func() {
-		if endStream && p.proxyConn != nil {
-			p.proxyConn.Close()
-			p.proxyConn = nil
-		}
-	}()
+	if endStream {
+		defer func() {
+			for addr, conn := range p.proxyConn {
+				conn.Close()
+				delete(p.proxyConn, addr)
+			}
+		}()
+	}
 
 	for _, da := range dataArray {
 		n += len(da)
@@ -336,24 +338,28 @@ func (p *parser) onData(reply, endStream bool, dataArray [][]byte, dataSize int)
 }
 
 func (p *parser) proxyWrite(data []byte) (err error) {
-	if p.proxyConn == nil {
+	conn, ok := p.proxyConn[p.proxyAddr]
+	if !ok {
 		if p.proxyAddr == "repeater" {
-			p.proxyConn = NewRepeater()
+			conn = NewRepeater()
 		} else {
-			if p.proxyConn, err = net.DialTimeout("tcp", p.proxyAddr, time.Second); err != nil {
-				return err
-			}
+			conn, err = net.DialTimeout("tcp", p.proxyAddr, time.Second)
 		}
+		if err != nil {
+			return err
+		}
+		p.proxyConn[p.proxyAddr] = conn
 	}
-	p.proxyConn.SetWriteDeadline(time.Now().Add(time.Second))
-	_, err = p.proxyConn.Write(data)
+	conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err = conn.Write(data)
 	return err
 }
 
 func (p *parser) proxyRead() (data []byte, err error) {
-	p.proxyConn.SetReadDeadline(time.Now().Add(time.Second))
+	conn := p.proxyConn[p.proxyAddr]
+	conn.SetReadDeadline(time.Now().Add(time.Second))
 	wb := bytes.NewBuffer(nil)
-	te := io.TeeReader(p.proxyConn, wb)
+	te := io.TeeReader(conn, wb)
 	rb := bufio.NewReader(te)
 	tp := textproto.NewReader(rb)
 	line, err := tp.ReadLineBytes()
