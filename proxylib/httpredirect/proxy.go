@@ -310,7 +310,7 @@ func (p *parser) onData(reply, endStream bool, dataArray [][]byte, dataSize int)
 		} else if reply {
 			p.decision = DecisionPass
 			logType = cilium.EntryType_Response
-		} else if !p.connection.Matches(head) {
+		} else if !p.connection.Matches(head) || head.ProxyAddr == "" {
 			p.decision = DecisionPass
 		} else {
 			p.proxyAddr = head.ProxyAddr // hack: insert ProxyAddr after Matches
@@ -339,6 +339,16 @@ func (p *parser) onData(reply, endStream bool, dataArray [][]byte, dataSize int)
 
 func (p *parser) proxyWrite(data []byte) (err error) {
 	conn, ok := p.proxyConn[p.proxyAddr]
+	defer func() {
+		if err == nil {
+			p.proxyConn[p.proxyAddr] = conn
+		} else {
+			p.proxyAddr = ""
+			if conn != nil {
+				conn.Close()
+			}
+		}
+	}()
 	if !ok {
 		if p.proxyAddr == "repeater" {
 			conn = NewRepeater()
@@ -348,7 +358,6 @@ func (p *parser) proxyWrite(data []byte) (err error) {
 		if err != nil {
 			return err
 		}
-		p.proxyConn[p.proxyAddr] = conn
 	}
 	conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, err = conn.Write(data)
@@ -363,6 +372,14 @@ func (p *parser) proxyRead() (data []byte, err error) {
 	rb := bufio.NewReader(te)
 	tp := textproto.NewReader(rb)
 	line, err := tp.ReadLineBytes()
+	defer func() {
+		if err != nil {
+			conn.Close()
+			delete(p.proxyConn, p.proxyAddr)
+			p.proxyAddr = ""
+		}
+	}()
+
 	if err != nil {
 		return nil, err
 	}
